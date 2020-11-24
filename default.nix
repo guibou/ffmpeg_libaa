@@ -24,12 +24,12 @@ rec {
     buildInputs = [ ffmpeg ];
 
     shellHook = ''
-       #ffmpeg -re -i /dev/video0 -vcodec libx264 -preset slow -crf 18 \
-       #    -pix_fmt yuv420p -vf 'scale=iw/3:ih/4,aa=fontname=terminus:fontsize=12:linespacing=1.0:contrast=50,pad=width=1920:x=(ow-iw)/2' \
-       #    -aspect 16:9 -acodec aac -strict -2 -f v4l2 \
-       #    /dev/video4
-           # -pix_fmt yuv420p -vf 'scale=iw/3:ih/4,aa=fontname=terminus:fontsize=12:linespacing=1.0:contrast=50,pad=width=1920:x=(ow-iw)/2' \
-       ffmpeg -re -i /dev/video0 \
+      # -re for realtime
+      # yuv420p works well with chromium
+      # -f v4l2 outputs in v4l2 format
+      # the scale is just because otherwise it is too sloow
+      # arguments for aa are taken on the internet. Looks good
+      ffmpeg -re -i /dev/video0 \
            -pix_fmt yuv420p -vf 'scale=iw/3:ih/4,aa=fontname=terminus:fontsize=12:linespacing=1.0:contrast=50' \
            -f v4l2 /dev/video4
     '';
