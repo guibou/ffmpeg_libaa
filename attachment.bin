@@ -1,0 +1,702 @@
+From 1391af4f776b4834cb5d803247cbf858faf13af3 Mon Sep 17 00:00:00 2001
+From: Alexander Tumin <iamtakingiteasy@eientei.org>
+Date: Mon, 23 Jun 2014 13:03:44 +0400
+Subject: [PATCH] added aalib video filter
+
+aalib is a library which produces ascii-art representation of iamge pixels
+
+Signed-off-by: Alexander Tumin <iamtakingiteasy@eientei.org>
+---
+ Changelog                |   1 +
+ configure                |   5 +
+ libavfilter/Makefile     |   1 +
+ libavfilter/allfilters.c |   1 +
+ libavfilter/version.h    |   2 +-
+ libavfilter/vf_aa.c      | 590 +++++++++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 599 insertions(+), 1 deletion(-)
+ create mode 100644 libavfilter/vf_aa.c
+
+diff --git a/Changelog b/Changelog
+index 0346877..cc1f937 100644
+--- a/Changelog
++++ b/Changelog
+@@ -30,6 +30,7 @@ version <next>:
+ - zoompan filter
+ - signalstats filter
+ - hqx filter (hq2x, hq3x, hq4x)
++- aalib video filter
+ 
+ 
+ version 2.2:
+diff --git a/configure b/configure
+index ddf0f3c..1e9e338 100755
+--- a/configure
++++ b/configure
+@@ -196,6 +196,7 @@ External library support:
+   --enable-gnutls          enable gnutls [no]
+   --disable-iconv          disable iconv [autodetect]
+   --enable-ladspa          enable LADSPA audio filtering
++  --enable-libaa           enable libaa [no]
+   --enable-libaacplus      enable AAC+ encoding via libaacplus [no]
+   --enable-libass          enable libass subtitles rendering [no]
+   --enable-libbluray       enable BluRay reading using libbluray [no]
+@@ -1318,6 +1319,7 @@ EXTERNAL_LIBRARY_LIST="
+     gnutls
+     iconv
+     ladspa
++    libaa
+     libaacplus
+     libass
+     libbluray
+@@ -2484,6 +2486,7 @@ unix_protocol_deps="sys_un_h"
+ unix_protocol_select="network"
+ 
+ # filters
++aa_filter_deps="libfreetype libaa"
+ aconvert_filter_deps="swresample"
+ amovie_filter_deps="avcodec avformat"
+ aresample_filter_deps="swresample"
+@@ -4689,6 +4692,8 @@ enabled decklink          && { check_header DeckLinkAPI.h || die "ERROR: DeckLin
+ enabled frei0r            && { check_header frei0r.h || die "ERROR: frei0r.h header not found"; }
+ enabled gnutls            && require_pkg_config gnutls gnutls/gnutls.h gnutls_global_init
+ enabled ladspa            && { check_header ladspa.h || die "ERROR: ladspa.h header not found"; }
++enabled libaa             && { check_lib aalib.h aa_init -laa ||
++                               die "ERROR: libaa (aalib) must be installed."; }
+ enabled libiec61883       && require libiec61883 libiec61883/iec61883.h iec61883_cmp_connect -lraw1394 -lavc1394 -lrom1394 -liec61883
+ enabled libaacplus        && require "libaacplus >= 2.0.0" aacplus.h aacplusEncOpen -laacplus
+ enabled libass            && require_pkg_config libass ass/ass.h ass_library_init
+diff --git a/libavfilter/Makefile b/libavfilter/Makefile
+index 08817ee..c8016e3 100644
+--- a/libavfilter/Makefile
++++ b/libavfilter/Makefile
+@@ -88,6 +88,7 @@ OBJS-$(CONFIG_SINE_FILTER)                   += asrc_sine.o
+ 
+ OBJS-$(CONFIG_ANULLSINK_FILTER)              += asink_anullsink.o
+ 
++OBJS-$(CONFIG_AA_FILTER)                     += vf_aa.o
+ OBJS-$(CONFIG_ASS_FILTER)                    += vf_subtitles.o
+ OBJS-$(CONFIG_ALPHAEXTRACT_FILTER)           += vf_extractplanes.o
+ OBJS-$(CONFIG_ALPHAMERGE_FILTER)             += vf_alphamerge.o
+diff --git a/libavfilter/allfilters.c b/libavfilter/allfilters.c
+index e4ac983..dac7842 100644
+--- a/libavfilter/allfilters.c
++++ b/libavfilter/allfilters.c
+@@ -106,6 +106,7 @@ void avfilter_register_all(void)
+ 
+     REGISTER_FILTER(ANULLSINK,      anullsink,      asink);
+ 
++    REGISTER_FILTER(AA,             aa,             vf);
+     REGISTER_FILTER(ALPHAEXTRACT,   alphaextract,   vf);
+     REGISTER_FILTER(ALPHAMERGE,     alphamerge,     vf);
+     REGISTER_FILTER(ASS,            ass,            vf);
+diff --git a/libavfilter/version.h b/libavfilter/version.h
+index f125032..bf9191e 100644
+--- a/libavfilter/version.h
++++ b/libavfilter/version.h
+@@ -30,7 +30,7 @@
+ #include "libavutil/version.h"
+ 
+ #define LIBAVFILTER_VERSION_MAJOR   4
+-#define LIBAVFILTER_VERSION_MINOR   9
++#define LIBAVFILTER_VERSION_MINOR  10
+ #define LIBAVFILTER_VERSION_MICRO 100
+ 
+ #define LIBAVFILTER_VERSION_INT AV_VERSION_INT(LIBAVFILTER_VERSION_MAJOR, \
+diff --git a/libavfilter/vf_aa.c b/libavfilter/vf_aa.c
+new file mode 100644
+index 0000000..b9957a5
+--- /dev/null
++++ b/libavfilter/vf_aa.c
+@@ -0,0 +1,590 @@
++/*
++ * Copyright (c) 2014 Alexander Tumin <iamtakingiteasy@eientei.org>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/**
++ * @file
++ * aa (ascii-art) video filter using aalib
++ *
++ * Each 4 pixels are related to a single ascii character
++ *
++ * filter by Alexander Tumin
++ */
++
++
++#include "config.h"
++
++#include <float.h> // DBL_MIN, DBL_MAX
++
++#include "libavutil/opt.h"
++#include "libavutil/tree.h"
++#include "avfilter.h"
++#include "drawutils.h"
++#include "internal.h"
++#include "formats.h"
++#include "video.h"
++
++#include <aalib.h>
++
++#if CONFIG_LIBFONTCONFIG
++#include <fontconfig/fontconfig.h>
++#endif
++
++#include <ft2build.h>
++#include FT_FREETYPE_H
++#include FT_GLYPH_H
++#include FT_STROKER_H
++
++typedef struct AAContext {
++    const AVClass *class;
++#if CONFIG_LIBFONTCONFIG
++    uint8_t *fontname;         ///< font family name (Sans, Serif, etc)
++    uint8_t *fontstyle;        ///< font style (bold, italic, etc)
++#endif
++    uint8_t *fontfile;         ///< font file
++    double fontsize;           ///< font size in pixels
++    double linespacing;        ///< font vertical line spacing
++
++    FFDrawContext dc;
++    FFDrawColor fgcolor;       ///< font color
++    FFDrawColor bgcolor;       ///< background color
++
++    FT_Library library;        ///< freetype library
++    FT_Face face;              ///< freetype font face
++    struct AVTreeNode *glyphs; ///< rendered glyphs
++    int xadvance;              ///< glyph x advance
++    int yadvance;              ///< glyph y advance
++
++    aa_context *aa;            ///< aalib context
++    struct aa_hardware_params aa_params;
++    struct aa_renderparams renderparams;
++    AVFrame *curframe;         ///< current rendering frame
++    int x;                     ///< cursor x (in characters)
++    int y;                     ///< corsor y (int characters)
++    int w;                     ///< canvas size (in characters)
++    int h;
++
++    int brightness;            ///< aalib brightness modifier 0..255
++    int contrast;              ///< aalib contrast modifier 0..127
++    double gamma;              ///< aalib gamma modifier
++    int inversion;             ///< whether to use aalib inversion
++    int aaflags;
++} AAContext;
++
++typedef struct Glyph {
++    FT_Glyph *glyph;  ///< freetype glyph
++    uint32_t code;    ///< glyph codepoint
++    FT_Bitmap bitmap; ///< glyph bitmap
++    FT_BBox bbox;     ///< glyph bounding box
++    int bitmap_left;  ///< distance from origin to left boundary
++    int bitmap_top;   ///< distance from origin to top boundary
++} Glyph;
++
++static int glyph_cmp(void *key, const void *g) {
++    const Glyph *a = key;
++    const Glyph *b = g;
++    int64_t diff = (int64_t)a->code - (int64_t)b->code;
++    return diff > 0 ? 1 : diff < 0 ? -1 : 0;
++}
++
++static int vf_driver_init(const struct aa_hardware_params *source, const void *data, struct aa_hardware_params *dest, void **params)
++{
++    *dest = *source;
++    return 1;
++}
++
++static void vf_driver_uninit(struct aa_context *context)
++{
++}
++
++static void vf_driver_setattr(aa_context *context, int attr) 
++{
++
++}
++
++static void vf_driver_print(aa_context *context, const char *text)
++{
++    AAContext *s = context->driverdata;
++    const unsigned char *c = text;
++    Glyph *glyph = NULL;
++    int cx, cy;
++    if (s) {
++        while(*c) {
++            Glyph dummy = { 0 };
++            dummy.code = *c;
++
++            glyph = av_tree_find(s->glyphs, &dummy, glyph_cmp, NULL);
++
++            if (!glyph) {
++                s->x += 1;
++                c++;
++                continue;
++            }
++
++            cx = (s->x * s->xadvance) + glyph->bitmap_left;
++            cy = (s->y * s->yadvance) - glyph->bitmap_top;
++
++            ff_blend_mask(&s->dc, &s->fgcolor,
++                          s->curframe->data,
++                          s->curframe->linesize,
++                          s->curframe->width, s->curframe->height,
++                          glyph->bitmap.buffer, glyph->bitmap.pitch,
++                          glyph->bitmap.width, glyph->bitmap.rows,
++                          glyph->bitmap.pixel_mode == FT_PIXEL_MODE_MONO ? 0 : 3,
++                          0, cx, cy);
++
++            s->x += 1;
++            c++;
++        }
++    }
++}
++
++static void vf_driver_getsize(aa_context *context, int *width, int *height)
++{
++    AAContext *s = context->driverdata;
++    if (s) {
++        *width = s->w;
++        *height = s->h;
++    }
++}
++
++static void vf_driver_gotoxy(aa_context *context, int x, int y)
++{
++    AAContext *s = context->driverdata;
++    if (s) {
++        s->x = x;
++        s->y = y;
++    }
++}
++
++static struct aa_driver vf_driver = {
++    .shortname = "vf",
++    .name = "video filter driver",
++    .init = vf_driver_init,
++    .uninit = vf_driver_uninit,
++    .setattr = vf_driver_setattr,
++    .getsize = vf_driver_getsize,
++    .print = vf_driver_print,
++    .gotoxy = vf_driver_gotoxy
++};
++
++#define OFFSET(x) offsetof(AAContext, x)
++#define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
++
++static const AVOption aa_options[] = {
++    {"fontfile", "set font file", OFFSET(fontfile), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS},
++#if CONFIG_LIBFONTCONFIG
++    {"fontname", "set font name", OFFSET(fontname), AV_OPT_TYPE_STRING, {.str="Monospace"}, CHAR_MIN, CHAR_MAX, FLAGS},
++    {"fontstyle", "set font style", OFFSET(fontstyle), AV_OPT_TYPE_STRING, {.str="Regular"}, CHAR_MIN, CHAR_MAX, FLAGS},
++#endif
++    {"fgcolor",     "set foreground color", OFFSET(fgcolor.rgba), AV_OPT_TYPE_COLOR, {.str="white"}, CHAR_MIN, CHAR_MAX, FLAGS},
++    {"bgcolor",     "set background color", OFFSET(bgcolor.rgba), AV_OPT_TYPE_COLOR, {.str="black"}, CHAR_MIN, CHAR_MAX, FLAGS},
++    {"fontsize",    "set font size",        OFFSET(fontsize), AV_OPT_TYPE_DOUBLE, {.dbl=0.0}, 0, DBL_MAX, FLAGS},
++    {"linespacing", "set line spacing",     OFFSET(linespacing), AV_OPT_TYPE_DOUBLE, {.dbl=1.2}, 0, DBL_MAX, FLAGS},
++    {"brightness",  "set brightness",       OFFSET(brightness), AV_OPT_TYPE_INT, {.i64=0}, 0, 255, FLAGS},
++    {"contrast",    "set contrast",         OFFSET(contrast), AV_OPT_TYPE_INT, {.i64=0}, 0, 127, FLAGS},
++    {"gamma",       "set gamma",            OFFSET(gamma), AV_OPT_TYPE_DOUBLE, {.dbl=1.0}, DBL_MIN, DBL_MAX, FLAGS},
++    {"inversion",   "set inversion",        OFFSET(inversion), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS},
++    {"aaflags",     "aalib flags",          OFFSET(aaflags), AV_OPT_TYPE_FLAGS, {.i64=0}, 0, INT_MAX, FLAGS, "aaflags"},
++    {"reverse",     NULL, 0, AV_OPT_TYPE_CONST, {.i64=AA_REVERSE_MASK}, .flags = FLAGS, .unit = "aaflags"},
++    {"all",         NULL, 0, AV_OPT_TYPE_CONST, {.i64=AA_ALL}, .flags = FLAGS, .unit = "aaflags"},
++    {"eight",       NULL, 0, AV_OPT_TYPE_CONST, {.i64=AA_EIGHT}, .flags = FLAGS, .unit = "aaflags"},
++    {"extended",    NULL, 0, AV_OPT_TYPE_CONST, {.i64=AA_EXTENDED}, .flags = FLAGS, .unit = "aaflags"},
++    {NULL}
++};
++
++AVFILTER_DEFINE_CLASS(aa);
++
++#undef __FTERRORS_H__
++
++#define FT_ERROR_START_LIST {
++#define FT_ERRORDEF(e, v, s) { (e), (s) },
++#define FT_ERROR_END_LIST { 0, NULL } };
++
++const struct {
++    int         err_code;
++    const char *err_msg;
++} ft_errors[] =
++#include FT_ERRORS_H
++
++#define FT_ERRMSG(e) ft_errors[e].err_msg
++
++static int load_font_file(AVFilterContext *ctx, const char *path, int index, int faillog) {
++    int err;
++    AAContext *s = ctx->priv;
++
++    err = FT_New_Face(s->library, path, index, &s->face);
++    if (err) {
++        if (faillog) {
++            av_log(ctx, AV_LOG_ERROR, "Could not load font \"%s\": %s\n", s->fontfile, FT_ERRMSG(err));
++        }
++        return AVERROR(EINVAL);
++    }
++    return 0;
++}
++
++#if CONFIG_LIBFONTCONFIG
++static int load_font_fontconfig(AVFilterContext *ctx)
++{
++    int err;
++    AAContext *s = ctx->priv;
++    FcConfig *fontconfig;
++    FcPattern *pat, *best;
++    FcResult result = FcResultMatch;
++    FcChar8 *filename;
++    int index;
++    double size;
++
++    fontconfig = FcInitLoadConfigAndFonts();
++    if (!fontconfig) {
++        av_log(ctx, AV_LOG_ERROR, "Impossible to init fontconfig\n");
++        return AVERROR_UNKNOWN;
++    }
++
++    pat = FcNameParse("default");
++    if (!pat) {
++        av_log(ctx, AV_LOG_ERROR, "Could not parse fontconfig pattern");
++        err = AVERROR(EINVAL);
++        goto fc_cleanup;
++    }
++
++    FcPatternAddString(pat, FC_FAMILY, s->fontname);
++    FcPatternAddString(pat, FC_STYLE, s->fontstyle);
++    if (s->fontsize != 0.0) {
++        FcPatternAddDouble(pat, FC_SIZE, s->fontsize);
++    }
++
++    FcDefaultSubstitute(pat);
++
++    if (!FcConfigSubstitute(fontconfig, pat, FcMatchPattern)) {
++        av_log(ctx, AV_LOG_ERROR, "Could not substitute fontconfig options");
++        err = AVERROR(ENOMEM);
++        goto fc_cleanup;
++    }
++
++    best = FcFontMatch(fontconfig, pat, &result);
++
++    if (!best || result != FcResultMatch) {
++        av_log(ctx, AV_LOG_ERROR, "Cannot find a valid font for the family %s\n", s->fontname);
++        err = AVERROR(ENOENT);
++        goto pat_cleanup;
++    }
++
++    if (FcPatternGetInteger(best, FC_INDEX, 0, &index) != FcResultMatch ||
++        FcPatternGetDouble(best, FC_SIZE, 0, &size) != FcResultMatch) {
++        av_log(ctx, AV_LOG_ERROR, "Impossible to find font information");
++        err = AVERROR(EINVAL);
++        goto pat_cleanup;
++    }
++
++    if (FcPatternGetString(best, FC_FILE, 0, &filename) != FcResultMatch) {
++        av_log(ctx, AV_LOG_ERROR, "No file path for %s\n", s->fontname);
++        err = AVERROR(ENOENT);
++        goto pat_cleanup;
++    }
++
++    av_log(ctx, AV_LOG_INFO, "Using \"%s\"\n", filename);
++    if (s->fontsize == 0.0) {
++        s->fontsize = size;
++    }
++
++    err = load_font_file(ctx, filename, index, 1);
++
++pat_cleanup:
++    FcPatternDestroy(pat);
++    FcPatternDestroy(best);
++fc_cleanup:
++    FcConfigDestroy(fontconfig);
++    return err;
++}
++#endif
++
++static int load_font(AVFilterContext *ctx)
++{
++    int err;
++    AAContext *s = ctx->priv;
++#if CONFIG_LIBFONTCONFIG
++    int fail = 0;
++#else
++    int fail = 1;
++#endif
++
++    err = load_font_file(ctx, s->fontfile, 0, fail);
++
++    if (!err) {
++        return 0;
++    }
++
++#if CONFIG_LIBFONTCONFIG
++    err = load_font_fontconfig(ctx);
++    if (!err) {
++        return 0;
++    }
++#endif
++
++    return err;
++}
++
++static int load_glyph(AVFilterContext *ctx, uint32_t code, Glyph **glyph_ptr)
++{
++    int err;
++    AAContext *s = ctx->priv;
++    FT_BitmapGlyph bitmapglyph;
++    Glyph *glyph;
++    struct AVTreeNode *node = NULL;
++
++    if (FT_Load_Char(s->face, code, FT_LOAD_DEFAULT)) {
++        return AVERROR(EINVAL);
++    }
++
++    if (!(glyph = av_mallocz(sizeof(Glyph))) || !(glyph->glyph = av_mallocz(sizeof(FT_Glyph)))) {
++        err = AVERROR(ENOMEM);
++        goto glyph_cleanup;
++    }
++    glyph->code = code;
++
++    if (FT_Get_Glyph(s->face->glyph, glyph->glyph)) {
++        err = AVERROR(EINVAL);
++        goto glyph_cleanup;
++    }
++
++    if (FT_Glyph_To_Bitmap(glyph->glyph, FT_RENDER_MODE_NORMAL, 0, 1)) {
++        err = AVERROR_EXTERNAL;
++        goto glyph_cleanup;
++    }
++
++    bitmapglyph = (FT_BitmapGlyph) *glyph->glyph;
++    glyph->bitmap = bitmapglyph->bitmap;
++    glyph->bitmap_left = bitmapglyph->left;
++    glyph->bitmap_top = bitmapglyph->top;
++
++    FT_Glyph_Get_CBox(*glyph->glyph, ft_glyph_bbox_pixels, &glyph->bbox);
++
++    if (!(node = av_tree_node_alloc())) {
++        err = AVERROR(ENOMEM);
++        goto glyph_cleanup;
++    }
++
++    av_tree_insert(&s->glyphs, glyph, glyph_cmp, &node);
++
++    if (glyph_ptr) {
++        *glyph_ptr = glyph;
++    }
++
++    return 0;
++
++glyph_cleanup:
++    if (glyph)
++        av_freep(&glyph->glyph);
++    av_freep(&glyph);
++    av_freep(&node);
++    return err;
++}
++
++static av_cold int init(AVFilterContext *ctx)
++{
++    int err;
++    int i;
++    AAContext *s = ctx->priv;
++    Glyph *glyph;
++
++    if (!s->fontfile && !CONFIG_LIBFONTCONFIG) {
++        av_log(ctx, AV_LOG_ERROR, "No font filename provided\n");
++        return AVERROR(EINVAL);
++    }
++
++    err = FT_Init_FreeType(&s->library);
++
++    if (err) {
++        av_log(ctx, AV_LOG_ERROR, "Could not load FreeType: %s\n", FT_ERRMSG(err));
++        return AVERROR(EINVAL);
++    }
++
++    err = load_font(ctx);
++
++    if (err) {
++        return err;
++    }
++
++    if (s->fontsize == 0.0) {
++        s->fontsize = 10.0;
++    }
++
++    err = FT_Set_Pixel_Sizes(s->face, 0, s->fontsize);
++
++    if (err) {
++        av_log(ctx, AV_LOG_ERROR, "Could not set font size to %f pixels: %s\n", s->fontsize, FT_ERRMSG(err));
++        return AVERROR(EINVAL);
++    }
++
++    for (i = 0; i < 256; i++) {
++        err = load_glyph(ctx, i, &glyph);
++        if (!err) {
++            s->xadvance = FFMAX(s->xadvance, glyph->bbox.xMax);
++        }
++    }
++
++    s->yadvance = s->fontsize * s->linespacing;
++
++    return 0;
++}
++
++static int glyph_enu_free(void *key, void *value)
++{
++    Glyph *glyph = value;
++
++    FT_Done_Glyph(*glyph->glyph);
++    av_freep(&glyph->glyph);
++    av_free(value);
++    return 0;
++}
++
++static av_cold void uninit(AVFilterContext *ctx)
++{
++    AAContext *s = ctx->priv;
++    s->aa->driverdata = 0;
++    aa_close(s->aa);
++
++    av_tree_enumerate(s->glyphs, NULL, NULL, glyph_enu_free);
++    av_tree_destroy(s->glyphs);
++    s->glyphs = NULL;
++
++    FT_Done_Face(s->face);
++    FT_Done_FreeType(s->library);
++}
++
++static int query_formats(AVFilterContext *ctx)
++{
++    ff_set_common_formats(ctx, ff_draw_supported_pixel_formats(0));
++    return 0;
++}
++
++static int filter_frame(AVFilterLink *inlink, AVFrame *in)
++{
++    AVFilterContext *ctx = inlink->dst;
++    AVFilterLink *outlink = ctx->outputs[0];
++    AAContext *s = ctx->priv;
++    AVFrame *out;
++    uint8_t *framebuffer;
++    int y;
++
++    out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
++    if (!out) {
++        av_frame_free(&in);
++        return AVERROR(ENOMEM);
++    }
++
++    av_frame_copy_props(out, in);
++    out->width = outlink->w;
++    out->height = outlink->h;
++    ff_fill_rectangle(&s->dc, &s->bgcolor, out->data, out->linesize, 0, 0, out->width, out->height);
++
++    framebuffer = aa_image(s->aa);
++
++    for (y = 0; y < s->h * 2; y++) {
++        memcpy(framebuffer + y * aa_imgwidth(s->aa),
++               in->data[0] + y * in->linesize[0],
++               FFMIN(in->linesize[0],aa_imgwidth(s->aa)));
++    }
++
++    av_frame_free(&in);
++
++    s->curframe = out;
++    aa_render(s->aa, &s->renderparams, 0, 0, s->w, s->h);
++    aa_flush(s->aa);
++
++
++    return ff_filter_frame(outlink, out);
++}
++
++static int config_props_in(AVFilterLink *inlink)
++{
++    AVFilterContext *ctx = inlink->dst;
++    AAContext *s = ctx->priv;
++
++    ff_draw_init(&s->dc, inlink->format, 0);
++    ff_draw_color(&s->dc, &s->fgcolor, s->fgcolor.rgba);
++    ff_draw_color(&s->dc, &s->bgcolor, s->bgcolor.rgba);
++
++    if (!s->aa) {
++        s->w = (inlink->w/2);
++        s->h = (inlink->h/2);
++
++        s->aa_params.supported = s->aaflags | AA_NORMAL_MASK | AA_REVERSE_MASK;
++        s->aa_params.width = s->w;
++        s->aa_params.height = s->h;
++
++        s->renderparams.bright = s->brightness;
++        s->renderparams.contrast = s->contrast;
++        s->renderparams.gamma = s->gamma;
++        s->renderparams.dither = AA_FLOYD_S;
++        s->renderparams.inversion = s->inversion;
++
++
++        s->aa = aa_init(&vf_driver, &s->aa_params, 0);
++
++        if (!s->aa) {
++            return AVERROR_EXTERNAL;
++        }
++        s->aa->driverdata = s;
++    }
++    return 0;
++}
++
++static int config_props_out(AVFilterLink *outlink)
++{
++    AVFilterContext *ctx = outlink->src;
++    AVFilterLink *inlink = outlink->src->inputs[0];
++    AAContext *s = ctx->priv;
++
++    outlink->w = (inlink->w/2) * s->xadvance;
++    outlink->h = (inlink->h/2) * s->yadvance;
++    return 0;
++}
++
++static const AVFilterPad avfilter_vf_aa_inputs[] = {
++    {
++        .name           = "default",
++        .type           = AVMEDIA_TYPE_VIDEO,
++        .filter_frame   = filter_frame,
++        .config_props   = config_props_in
++    },
++    { NULL }
++};
++
++static const AVFilterPad avfilter_vf_aa_outputs[] = {
++    {
++        .name         = "default",
++        .type         = AVMEDIA_TYPE_VIDEO,
++        .config_props = config_props_out
++    },
++    { NULL }
++};
++
++AVFilter ff_vf_aa = {
++    .name          = "aa",
++    .description   = NULL_IF_CONFIG_SMALL("Make ascii-art font-rendered image out of input."),
++    .priv_size     = sizeof(AAContext),
++    .priv_class    = &aa_class,
++    .init          = init,
++    .uninit        = uninit,
++    .query_formats = query_formats,
++    .inputs        = avfilter_vf_aa_inputs,
++    .outputs       = avfilter_vf_aa_outputs
++};
+-- 
+1.8.5.5
