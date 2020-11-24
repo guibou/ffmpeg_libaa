@@ -3,13 +3,21 @@ let
 in
 rec {
   ffmpeg = pkgs.ffmpeg_2_8.overrideAttrs(old: {
-  src = /home/guillaume/srcs/ffmpeg;
-  configureFlags = old.configureFlags ++ ["--enable-libaa"];
-  buildInputs = old.buildInputs ++ [ pkgs.aalib ];
-  #patches = old.patches ++ [
-  #  # https://ffmpeg.org/pipermail/ffmpeg-devel/2014-June/159169.html
-  #  ./aa.diff
-  #];
+    src = pkgs.fetchurl {
+      url = "https://github.com/FFmpeg/FFmpeg/archive/d5b9ecc2d1ed345282064e41a2d6fbe4fa03bb4e.tar.gz";
+      sha256 = "0bzdwpgf0cayyl1blsiyjn8d4xry0a7aazl0aw1hpm9v96yx06pz";
+    };
+
+    configureFlags = old.configureFlags ++ ["--enable-libaa"];
+    buildInputs = old.buildInputs ++ [ pkgs.aalib ];
+
+    patches = old.patches ++ [
+      # This patch is from:
+      # https://ffmpeg.org/pipermail/ffmpeg-devel/2014-June/159169.html
+      # I git checkout d5b9ecc2d1ed345282064e41a2d6fbe4fa03bb4e and git apply the patch from the mail
+      # Solve trivial merge conflicts and dumped the result in aa.diff
+      ./aa.diff
+    ];
   });
 
   shell = pkgs.mkShell {
